@@ -6,11 +6,10 @@ A especificação oficial é o enunciado **TRABALHO_DE_DESENVOLVIMENTO_WEB_BACK_
 
 ## Etapa atual
 
-Estrutura inicial com Java 21, Spring Boot 4.1.1, Maven, Spring Web MVC,
-Spring Data JPA e MySQL. Ainda não existem entidades nem endpoints.
-Os CRUDs de Cliente, Produto e Pedido serão implementados individualmente,
-mediante aprovação. O relatório, diagrama UML e prints do Postman serão
-produzidos nas etapas correspondentes.
+Java 21, Spring Boot 4.1.1, Maven, Spring Web MVC, Spring Data JPA e MySQL.
+Implementado exclusivamente `POST /clientes`. As demais operações e as entidades
+Produto e Pedido serão implementadas individualmente, mediante aprovação.
+O relatório, diagrama UML e prints do Postman serão produzidos nas etapas correspondentes.
 
 ## Requisitos
 
@@ -52,12 +51,29 @@ $env:DB_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host 'Senha MyS
 
 `DB_URL` é opcional e usa a URL local acima por padrão.
 `DB_USERNAME` e `DB_PASSWORD` são obrigatórias e não possuem valores padrão.
-Não versione credenciais. Arquivos `.env` são ignorados pelo Git, mas não são
-carregados automaticamente pela aplicação.
+Não versione credenciais. O arquivo `.env` na raiz é carregado automaticamente
+por `spring.config.import=optional:file:.env[.properties]` e ignorado pelo Git.
+Use o formato de propriedades `CHAVE=valor`, sem `export` e sem aspas envolvendo
+os valores. Variáveis exportadas no terminal têm prioridade sobre o `.env`.
+Execute a aplicação a partir da raiz para que o arquivo seja encontrado.
 
-O Hibernate está configurado com `ddl-auto=none`: nesta etapa não cria nem
-altera tabelas. A estratégia de criação das tabelas será definida ao implementar
-as entidades. `open-in-view=false` mantém o acesso JPA fora da camada web.
+O Hibernate mantém `ddl-auto=none` e não cria nem altera tabelas.
+A estratégia desta etapa é executar manualmente o script versionado
+`database/001-create-clientes.sql`, uma única vez no banco indicado por `DB_URL`,
+antes de iniciar a aplicação. Por exemplo, usando o cliente MySQL:
+
+```bash
+mysql -h localhost -P 3306 -u seu_usuario -p baozi_store < database/001-create-clientes.sql
+```
+
+Ajuste host, porta e banco conforme sua configuração. No PowerShell, abra o
+cliente `mysql` e execute `SOURCE database/001-create-clientes.sql;`.
+O script não é executado automaticamente e não apaga dados existentes.
+Se `clientes` já existir, confira seu esquema antes de executar o script;
+ele não faz migração de tabelas existentes.
+
+A tabela usa `BIGINT AUTO_INCREMENT` para o ID, `VARCHAR(255) NOT NULL` para
+`nome` e `DATE NOT NULL` para `cliente_desde`. `open-in-view=false` foi preservado.
 
 ## Compilar e executar
 
@@ -77,23 +93,63 @@ Para executar o JAR após a compilação:
 java -jar target/baozi-store-api-0.0.1-SNAPSHOT.jar
 ```
 
-A aplicação utiliza a porta 8080. É necessário ter MySQL acessível e as
-credenciais configuradas para iniciar. Como não há endpoints de negócio,
-uma chamada a `http://localhost:8080/` retorna 404; isso é esperado.
+A aplicação utiliza a porta 8080. É necessário ter MySQL acessível,
+credenciais configuradas e a tabela criada para cadastrar clientes.
 
-`clean verify` compila e empacota sem exigir MySQL, pois ainda não há testes
-de contexto ou integração. Esta etapa não contém testes automatizados;
-o sucesso do build não valida a conexão com o banco.
+## Cadastrar cliente
+
+```bash
+curl -i -X POST http://localhost:8080/clientes \
+  -H 'Content-Type: application/json' \
+  -d '{"nome":"Raul1234567","clienteDesde":"2026-01-01"}'
+```
+
+No Postman, selecione `POST`, URL `http://localhost:8080/clientes`,
+Body → raw → JSON, e use o mesmo corpo. Substitua `Raul1234567` pelo seu
+nome seguido do RU real ao gerar as evidências exigidas pela faculdade.
+
+Resposta esperada: **201 Created** com JSON (o ID pode variar):
+
+```json
+{
+  "id": 1,
+  "nome": "Raul1234567",
+  "clienteDesde": "2026-01-01"
+}
+```
+
+- `nome`: obrigatório, não pode ser vazio ou composto só de espaços; máximo de 255 caracteres.
+- `clienteDesde`: obrigatória, formato `yyyy-MM-dd`, deve representar uma data válida, atual ou passada.
+- `id`: gerado pelo banco; um ID enviado pelo cliente é ignorado.
+
+Dados inválidos ou JSON malformado retornam **400 Bad Request** sem persistência.
+O corpo de erro usa o comportamento padrão do Spring; não há contrato próprio
+para mensagens de validação nesta etapa. Nomes duplicados são permitidos.
+Não existem outros endpoints de negócio implementados.
+
+## Testes
+
+```bash
+./mvnw clean verify
+```
+
+Os testes MVC usam o controller real, desserialização JSON e Bean Validation,
+com repositório simulado. Cobrem 201 e resposta, ID enviado sendo ignorado,
+nome ausente/nulo/vazio/em branco/longo, datas ausentes/nulas/futuras/inválidas,
+JSON malformado e limites válidos. Não exigem MySQL nem `.env`. O Mockito usa o mock maker por subclasses
+(suficiente para a interface do repositório), sem anexar agentes à JVM.
+Não validam persistência real, geração do ID pelo MySQL ou execução do script SQL;
+esses pontos precisam ser conferidos localmente com o MySQL e o Postman.
 
 ## Organização
 
 - `src/main/java/br/com/baozi/store/BaoziStoreApiApplication.java`: inicialização.
-- `src/main/java/br/com/baozi/store/model/`: futuras entidades.
-- `src/main/java/br/com/baozi/store/repository/`: futuros repositórios JPA.
-- `src/main/java/br/com/baozi/store/controller/`: futuros controladores REST.
+- `src/main/java/br/com/baozi/store/model/`: entidade `Cliente`.
+- `src/main/java/br/com/baozi/store/repository/`: `ClienteRepository` com Spring Data JPA.
+- `src/main/java/br/com/baozi/store/controller/`: `ClienteController` com `POST /clientes`.
 - `src/main/resources/application.properties`: configuração da aplicação.
 - `pom.xml`: dependências e compilação Java 21.
 - `.mvn/wrapper/`, `mvnw`, `mvnw.cmd`: Maven Wrapper oficial.
 
-Os pacotes usam `package-info.java` para manter sua estrutura no Git sem
-introduzir entidades, interfaces de repositório ou controladores nesta etapa.
+- `database/001-create-clientes.sql`: criação manual da tabela.
+- `src/test/`: testes MVC do cadastro.
