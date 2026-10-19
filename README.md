@@ -4,17 +4,17 @@ API REST acadêmica da disciplina Desenvolvimento Web Back-End (Uninter).
 A especificação oficial é o enunciado **TRABALHO_DE_DESENVOLVIMENTO_WEB_BACK_2026**;
 **ATIVIDADE PRATICA - MODELO** define a estrutura do relatório de entrega.
 
-## Etapa atual
+## Escopo implementado
 
-Java 21, Spring Boot 4.1.1, Maven, Spring Web MVC, Spring Data JPA e MySQL.
-Implementado exclusivamente `POST /clientes`. As demais operações e as entidades
-Produto e Pedido serão implementadas individualmente, mediante aprovação.
-O relatório, diagrama UML e prints do Postman serão produzidos nas etapas correspondentes.
+API acadêmica em Java 21 / Spring Boot 4.1.1, Spring MVC, Spring Data JPA e MySQL.
+Implementados os 12 endpoints obrigatórios de Cliente, Produto e Pedido.
+Cada pedido contém um cliente, um produto e uma quantidade positiva.
+Sem atualização (PUT), autenticação ou outras funcionalidades opcionais.
 
 ## Requisitos
 
 - JDK 21 (`java -version` deve indicar 21; configure `JAVA_HOME`).
-- MySQL 8 ou superior em execução.
+- MySQL 8.0.46 em execução local, sem Docker.
 - Acesso à internet na primeira execução do Maven Wrapper.
 
 Não é necessário instalar Maven. O Wrapper está incluído para Linux/macOS
@@ -22,7 +22,7 @@ Não é necessário instalar Maven. O Wrapper está incluído para Linux/macOS
 
 ## Banco e variáveis de ambiente
 
-Crie o banco usando uma conta administrativa do MySQL:
+Se o banco ainda não existir, crie-o usando uma conta administrativa do MySQL:
 
 ```sql
 CREATE DATABASE baozi_store CHARACTER SET utf8mb4;
@@ -57,23 +57,45 @@ Use o formato de propriedades `CHAVE=valor`, sem `export` e sem aspas envolvendo
 os valores. Variáveis exportadas no terminal têm prioridade sobre o `.env`.
 Execute a aplicação a partir da raiz para que o arquivo seja encontrado.
 
-O Hibernate mantém `ddl-auto=none` e não cria nem altera tabelas.
-A estratégia desta etapa é executar manualmente o script versionado
-`database/001-create-clientes.sql`, uma única vez no banco indicado por `DB_URL`,
-antes de iniciar a aplicação. Por exemplo, usando o cliente MySQL:
+## Criar as tabelas
+
+O Hibernate mantém `spring.jpa.hibernate.ddl-auto=none`; scripts SQL são
+executados manualmente, uma única vez e em ordem, no banco definido em `DB_URL`:
+
+1. `database/001-create-clientes.sql`
+2. `database/002-create-produtos.sql`
+3. `database/003-create-pedidos.sql`
+
+Se a tabela de clientes já foi criada na etapa anterior, **não execute 001 novamente**.
+Execute somente 002 e 003. Os scripts não apagam dados, não alteram a tabela
+`clientes` e não fazem migração de tabelas preexistentes. Não desative as chaves
+estrangeiras; se uma tabela já existir, confira seu esquema antes de continuar.
+
+Exemplo no Bash (ajuste host, porta, usuário e banco conforme `DB_URL`):
 
 ```bash
-mysql -h localhost -P 3306 -u seu_usuario -p baozi_store < database/001-create-clientes.sql
+mysql -h localhost -P 3306 -u seu_usuario -p baozi_store < database/002-create-produtos.sql
+mysql -h localhost -P 3306 -u seu_usuario -p baozi_store < database/003-create-pedidos.sql
 ```
 
-Ajuste host, porta e banco conforme sua configuração. No PowerShell, abra o
-cliente `mysql` e execute `SOURCE database/001-create-clientes.sql;`.
-O script não é executado automaticamente e não apaga dados existentes.
-Se `clientes` já existir, confira seu esquema antes de executar o script;
-ele não faz migração de tabelas existentes.
+No cliente MySQL interativo, inclusive no Windows:
 
-A tabela usa `BIGINT AUTO_INCREMENT` para o ID, `VARCHAR(255) NOT NULL` para
-`nome` e `DATE NOT NULL` para `cliente_desde`. `open-in-view=false` foi preservado.
+```sql
+USE baozi_store;
+SOURCE database/002-create-produtos.sql;
+SOURCE database/003-create-pedidos.sql;
+SHOW CREATE TABLE produtos;
+SHOW CREATE TABLE pedidos;
+```
+
+Todas as tabelas usam InnoDB e ID `BIGINT AUTO_INCREMENT`. O preço usa
+`DECIMAL(12,2)`. `pedidos.cliente_id` e `pedidos.produto_id` são chaves estrangeiras
+com `ON DELETE RESTRICT`, sem exclusão em cascata. Exclua os pedidos antes de
+excluir o cliente/produto associado. As referências são mapeadas como IDs na
+entidade Pedido para manter o JSON exigido; a relação 1:N é garantida no banco.
+
+`estoque` é Boolean de disponibilidade, conforme o enunciado, e não um contador.
+Não há baixa automática nem bloqueio de pedidos baseado nesse campo.
 
 ## Compilar e executar
 
@@ -94,62 +116,136 @@ java -jar target/baozi-store-api-0.0.1-SNAPSHOT.jar
 ```
 
 A aplicação utiliza a porta 8080. É necessário ter MySQL acessível,
-credenciais configuradas e a tabela criada para cadastrar clientes.
+credenciais configuradas e os scripts de criação das tabelas já executados.
 
-## Cadastrar cliente
+## Endpoints
+
+| Recurso | Criar | Listar | Consultar | Excluir |
+| --- | --- | --- | --- | --- |
+| Cliente | `POST /clientes` | `GET /clientes` | `GET /clientes/{id}` | `DELETE /clientes/{id}` |
+| Produto | `POST /produtos` | `GET /produtos` | `GET /produtos/{id}` | `DELETE /produtos/{id}` |
+| Pedido | `POST /pedidos` | `GET /pedidos` | `GET /pedidos/{id}` | `DELETE /pedidos/{id}` |
+
+- POST válido: **201 Created**, JSON com os campos da entidade e ID gerado.
+- GET válido: **200 OK**, objeto na consulta por ID ou array na listagem (`[]` se vazio).
+- DELETE válido: **204 No Content**, sem corpo.
+- Consulta/exclusão de ID inexistente ou referência ausente no POST de Pedido: **404 Not Found**.
+- Campos inválidos, ID não numérico na URL ou JSON malformado: **400 Bad Request**.
+- Exclusão de Cliente/Produto associado a pedidos: **409 Conflict**, sem exclusão em cascata.
+- Conflito de integridade entre a checagem da referência e a gravação de Pedido: **409 Conflict**.
+
+O conflito de integridade usa `ProblemDetail` com status e mensagem genérica,
+sem expor detalhes SQL. Os demais erros usam o comportamento padrão do Spring;
+não há contrato personalizado de mensagens por campo.
+
+### Exemplos para curl e Postman
+
+No Postman, configure o método e a URL e use **Body → raw → JSON** nos POSTs.
+O header é `Content-Type: application/json`. Substitua o nome e RU de exemplo
+pelos seus dados reais para os prints do trabalho.
 
 ```bash
 curl -i -X POST http://localhost:8080/clientes \
   -H 'Content-Type: application/json' \
   -d '{"nome":"Raul1234567","clienteDesde":"2026-01-01"}'
+
+curl -i -X POST http://localhost:8080/produtos \
+  -H 'Content-Type: application/json' \
+  -d '{"nome":"Baozi de porco","preco":12.50,"estoque":true}'
+
+# Use os IDs retornados acima, que podem ser diferentes de 1.
+curl -i -X POST http://localhost:8080/pedidos \
+  -H 'Content-Type: application/json' \
+  -d '{"clienteId":1,"produtoId":1,"quantidade":3}'
 ```
 
-No Postman, selecione `POST`, URL `http://localhost:8080/clientes`,
-Body → raw → JSON, e use o mesmo corpo. Substitua `Raul1234567` pelo seu
-nome seguido do RU real ao gerar as evidências exigidas pela faculdade.
-
-Resposta esperada: **201 Created** com JSON (o ID pode variar):
+Respostas de exemplo dos POSTs (IDs ilustrativos):
 
 ```json
-{
-  "id": 1,
-  "nome": "Raul1234567",
-  "clienteDesde": "2026-01-01"
-}
+{"id":1,"nome":"Raul1234567","clienteDesde":"2026-01-01"}
 ```
 
-- `nome`: obrigatório, não pode ser vazio ou composto só de espaços; máximo de 255 caracteres.
-- `clienteDesde`: obrigatória, formato `yyyy-MM-dd`, deve representar uma data válida, atual ou passada.
-- `id`: gerado pelo banco; um ID enviado pelo cliente é ignorado.
+```json
+{"id":1,"nome":"Baozi de porco","preco":12.50,"estoque":true}
+```
 
-Dados inválidos ou JSON malformado retornam **400 Bad Request** sem persistência.
-O corpo de erro usa o comportamento padrão do Spring; não há contrato próprio
-para mensagens de validação nesta etapa. Nomes duplicados são permitidos.
-Não existem outros endpoints de negócio implementados.
+```json
+{"id":1,"clienteId":1,"produtoId":1,"quantidade":3}
+```
 
-## Testes
+Consultas:
+
+```bash
+curl -i http://localhost:8080/clientes
+curl -i http://localhost:8080/clientes/1
+curl -i http://localhost:8080/produtos
+curl -i http://localhost:8080/produtos/1
+curl -i http://localhost:8080/pedidos
+curl -i http://localhost:8080/pedidos/1
+```
+
+Exclusões, respeitando as dependências (use IDs de registros de teste):
+
+```bash
+curl -i -X DELETE http://localhost:8080/pedidos/1
+curl -i -X DELETE http://localhost:8080/clientes/1
+curl -i -X DELETE http://localhost:8080/produtos/1
+```
+
+### Validações
+
+| Entidade | Regras |
+| --- | --- |
+| Cliente | `nome` obrigatório, não vazio/em branco, até 255 caracteres; `clienteDesde` obrigatória, data válida em `yyyy-MM-dd`, atual ou passada. |
+| Produto | `nome` obrigatório, não vazio/em branco, até 255 caracteres; `preco` obrigatório, de 0.01 a 9999999999.99, até 2 casas decimais; `estoque` Boolean obrigatório (`true` ou `false`). |
+| Pedido | `clienteId` e `produtoId` obrigatórios, positivos e existentes; `quantidade` Integer obrigatória, positiva, até 2147483647. |
+
+IDs dos novos registros são gerados pelo banco; IDs enviados nos POSTs são ignorados.
+Nomes duplicados são permitidos. Não há total de pedido ou múltiplos produtos.
+A desserialização rejeita números fracionários para IDs/quantidades, evitando
+truncamento silencioso (`spring.jackson.deserialization.accept-float-as-int=false`).
+As configurações de MySQL e carregamento do `.env` foram preservadas.
+
+### Coleção Postman
+
+Importe `postman/baozi-store.postman_collection.json`. A variável `baseUrl` vale
+`http://localhost:8080`. Os POSTs guardam automaticamente `clienteId`, `produtoId`
+e `pedidoId` retornados nas variáveis da coleção. Os valores de nome/RU são exemplos.
+
+Execute na ordem: criar Cliente → criar Produto → criar Pedido → listar e consultar.
+A coleção inclui tentativas de exclusão dos pais com pedido associado (esperado 409),
+dados inválidos (400), consulta ausente (404), e exclusão final na ordem correta (204).
+As requisições de exclusão removem os registros criados para o teste.
+Revise as variáveis antes de executá-las contra um banco com dados importantes.
+Guarde prints de POST, listagem, consulta e DELETE para o relatório da faculdade.
+
+## Testes automatizados
 
 ```bash
 ./mvnw clean verify
 ```
 
-Os testes MVC usam o controller real, desserialização JSON e Bean Validation,
-com repositório simulado. Cobrem 201 e resposta, ID enviado sendo ignorado,
-nome ausente/nulo/vazio/em branco/longo, datas ausentes/nulas/futuras/inválidas,
-JSON malformado e limites válidos. Não exigem MySQL nem `.env`. O Mockito usa o mock maker por subclasses
-(suficiente para a interface do repositório), sem anexar agentes à JVM.
-Não validam persistência real, geração do ID pelo MySQL ou execução do script SQL;
-esses pontos precisam ser conferidos localmente com o MySQL e o Postman.
+Testes MVC com MockMvc, JSON e Bean Validation reais, com repositórios simulados.
+Incluem os testes existentes do POST de Cliente, novos GET/DELETE das três entidades,
+POST de Produto/Pedido, campos inválidos e limites, referências ausentes e conflitos
+simulados de integridade. Mockito usa o mock maker por subclasses.
+
+Não exigem MySQL ou `.env` e não substituem a validação local de persistência.
+Ainda precisam ser validados no **MySQL 8.0.46** local:
+
+- Execução de 002 e 003, esquema e chaves estrangeiras.
+- ID automático e leitura dos registros persistidos pelos três recursos.
+- Cliente/Produto vinculados não podem ser apagados e o Pedido permanece intacto.
+- Após excluir Pedido, exclusão de Cliente/Produto retorna 204; nova consulta retorna 404.
+- As evidências no Postman devem usar os mesmos dados da situação fictícia do relatório.
 
 ## Organização
 
-- `src/main/java/br/com/baozi/store/BaoziStoreApiApplication.java`: inicialização.
-- `src/main/java/br/com/baozi/store/model/`: entidade `Cliente`.
-- `src/main/java/br/com/baozi/store/repository/`: `ClienteRepository` com Spring Data JPA.
-- `src/main/java/br/com/baozi/store/controller/`: `ClienteController` com `POST /clientes`.
-- `src/main/resources/application.properties`: configuração da aplicação.
-- `pom.xml`: dependências e compilação Java 21.
-- `.mvn/wrapper/`, `mvnw`, `mvnw.cmd`: Maven Wrapper oficial.
+- `model/`: entidades Cliente, Produto e Pedido.
+- `repository/`: interfaces Spring Data JPA.
+- `controller/`: controladores MVC e tratamento de conflito de integridade.
+- `database/`: scripts SQL manuais e ordenados.
+- `src/test/`: testes MVC.
+- `postman/`: coleção para validação manual.
 
-- `database/001-create-clientes.sql`: criação manual da tabela.
-- `src/test/`: testes MVC do cadastro.
+Não foram adicionadas dependências para esta etapa.
